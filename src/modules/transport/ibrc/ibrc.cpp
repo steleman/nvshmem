@@ -1091,7 +1091,7 @@ out:
     return status;
 }
 
-int nvshmemt_ibrc_progress(nvshmem_transport_t t, int is_proxy) {
+int nvshmemt_ibrc_progress(nvshmem_transport_t t) {
     int status = 0;
     nvshmemt_ib_common_state_t ibrc_state = (nvshmemt_ib_common_state_t)t->state;
 
@@ -1449,10 +1449,12 @@ int nvshmemt_ibrc_ep_connect_wrapper(nvshmemt_ib_common_ep_ptr_t ep,
     return nvshmemt_ibrc_ep_connect((struct ibrc_ep *)ep, ep_handle);
 }
 
+#ifdef NVSHMEM_USE_GDRCOPY
 int progress_recv_wrapper(nvshmem_transport_t tcurr, nvshmemt_ib_wait_predicate_t wait_predicate) {
     nvshmemt_ib_common_state_t ibrc_state = (nvshmemt_ib_common_state_t)tcurr->state;
     return progress_recv(tcurr, ibrc_state, wait_predicate);
 }
+#endif
 
 int nvshmemt_init(nvshmem_transport_t *t, struct nvshmemi_cuda_fn_table *table, int api_version) {
     int status = 0;
@@ -1622,6 +1624,14 @@ int nvshmemt_init(nvshmem_transport_t *t, struct nvshmemi_cuda_fn_table *table, 
         const char *name = ftable.get_device_name(device->common_device.dev);
         NVSHMEMI_NULL_ERROR_JMP(name, status, NVSHMEMX_ERROR_INTERNAL, out,
                                 "ibv_get_device_name failed \n");
+
+        bool device_supported = nvshmemt_check_hca_prefix(ibrc_state->options, name);
+
+        if (!device_supported) {
+            ftable.close_device(device->common_device.context);
+            device->common_device.context = NULL;
+            continue;
+        }
 
         status =
             ftable.query_device(device->common_device.context, &device->common_device.device_attr);

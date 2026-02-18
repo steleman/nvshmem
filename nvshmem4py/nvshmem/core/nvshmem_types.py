@@ -22,6 +22,7 @@ from cuda.core.experimental._stream import Stream
 import cuda.bindings.driver
 
 from nvshmem.bindings import malloc, free, ptr, mc_ptr, Team_id, buffer_register_symmetric, buffer_unregister_symmetric
+from nvshmem.core._internal_tracking import _is_initialized, InternalInitStatus
 
 logger = logging.getLogger("nvshmem")
 
@@ -159,7 +160,7 @@ class NvshmemKernelObject:
     
     # TODO: convert to class when cuda.bindings.Kernel is imported
     @staticmethod
-    def from_cuda_bindings(cuda_kernel: cuda.bindings.driver.CUmodule):
+    def from_cuda_bindings(cuda_kernel: "cuda.bindings.driver.CUmodule"):
         """
         Create a NvshmemKernelObject from a CUDA kernel
         """
@@ -327,6 +328,13 @@ class NvshmemResource(MemoryResource):
         """
         # Extract info
         logger.debug(f"Free called on buffer with address {ptr}")
+        if not _is_initialized["status"] == InternalInitStatus.INITIALIZED:
+            logger.warning("NVSHMEM Library is not initialized. Cannot free buffer")
+            return
+
+        if not hasattr(self, "_mem_references"):
+            logger.info("Cannot free buffer. NVSHMEM resource is being destroyed")
+            return
         if self._mem_references.get(ptr) is None:
             logger.debug("Freed a buffer that is not tracked")
             return
@@ -388,7 +396,7 @@ class NvshmemResource(MemoryResource):
         parent_ptr = buffer.handle
         result = ptr(parent_ptr, pe)
 
-        if result is None:
+        if not result or result == 0:
             raise NvshmemError("Failed to retrieve peer buffer")
 
         entry = self._mem_references.get(result, None)
@@ -415,7 +423,7 @@ class NvshmemResource(MemoryResource):
         # None or raising an exception is the failing case
         parent_ptr = buffer.handle
         result = mc_ptr(team, parent_ptr)
-        if result is None:
+        if not result or result == 0:
             raise NvshmemError("Failed to retrieve multicast buffer")
 
         entry = self._mem_references.get(result, None)

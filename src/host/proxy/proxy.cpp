@@ -139,6 +139,7 @@ int nvshmemi_proxy_setup_device_channels(proxy_state_t *state) {
     nvshmemi_device_state.proxy_channel_g_buf = proxy_channel_g_buf;
     nvshmemi_device_state.proxy_channel_g_coalescing_buf = proxy_channel_g_coalescing_buf;
     assert(proxy_channel_g_buf_size % sizeof(g_elem_t) == 0);
+    assert(G_COALESCING_BUF_SIZE >= (proxy_channel_g_buf_size * 16)); /* This requirement is because of the way g_coaelscing is implemented */
 
 out:
     return status;
@@ -814,7 +815,7 @@ inline void progress_quiet(proxy_state_t *proxy_state) {
 
             tcurr = proxy_state->transport[i];
             if (tcurr == NULL) continue;
-            status = tcurr->host_ops.quiet(tcurr, i, NVSHMEMX_QP_DEFAULT);
+            status = tcurr->host_ops.quiet(tcurr, i, NVSHMEMX_QP_ALL);
             if (unlikely(status)) {
                 NVSHMEMI_ERROR_PRINT("aborting due to error in progress_quiet \n");
                 exit(-1);
@@ -957,6 +958,7 @@ inline int process_channel_qp_fence(proxy_state_t *proxy_state, proxy_channel_t 
         }
         for (int j = 0; j < num_pe; j++) {
             int pe = base_pe + j;
+            NVSHMEMU_PE_TRANSLATE(pe);
             struct nvshmem_transport *tcurr = proxy_state->transport[pe];
             if (tcurr->host_ops.fence)
                 status = tcurr->host_ops.fence(tcurr, pe, qp_index, is_multi);
@@ -1015,6 +1017,7 @@ inline int process_channel_qp_quiet(proxy_state_t *proxy_state, proxy_channel_t 
         }
         for (int j = start_pe; j < start_pe + num_pe; j++) {
             int pe = j % state->npes;
+            NVSHMEMU_PE_TRANSLATE(pe);
             struct nvshmem_transport *tcurr = proxy_state->transport[pe];
             if (tcurr->host_ops.quiet)
                 status = tcurr->host_ops.quiet(tcurr, pe, qp_sync_req_0->qp_index);
@@ -1310,8 +1313,12 @@ inline void progress_channels(proxy_state_t *proxy_state) {
                         NVSHMEMI_NZ_EXIT(status, "error in process_channel_inline<char>\n");
                         break;
                     case NVSHMEMI_OP_FENCE:
-                    case NVSHMEMI_OP_FENCE_QP:
                         TRACE(NVSHMEM_PROXY, "host proxy: received FENCE \n");
+                        status = process_channel_fence(proxy_state, ch);
+                        NVSHMEMI_NZ_EXIT(status, "error in process_channel_fence\n");
+                        break;
+                    case NVSHMEMI_OP_FENCE_QP:
+                        TRACE(NVSHMEM_PROXY, "host proxy: received QP FENCE \n");
                         status = process_channel_qp_fence(proxy_state, ch);
                         NVSHMEMI_NZ_EXIT(status, "error in process_channel_qp_fence\n");
                         break;
@@ -1425,7 +1432,7 @@ void progress_transports(proxy_state_t *proxy_state) {
 
         if (tcurr->host_ops.progress == NULL) continue;
 
-        status = tcurr->host_ops.progress(tcurr, 1);
+        status = tcurr->host_ops.progress(tcurr);
         NVSHMEMI_NZ_ERROR_JMP(status, NVSHMEMX_ERROR_INTERNAL, out,
                               "transport %d progress failed \n", i);
     }

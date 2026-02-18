@@ -52,6 +52,7 @@ static std::set<nvshmemx_device_lib_init_cb> registered_device_state_cb;
 
 static void nvshmemi_init_debug(void);
 static void nvshmemi_init_msg(void);
+int set_job_connectivity(nvshmemi_state_t*);
 
 struct nvshmemi_cuda_fn_table *nvshmemi_cuda_syms;
 nvshmemi_state_t *nvshmemi_state;
@@ -144,11 +145,12 @@ static int register_state_ptr(void *common, void *transport) {
 }
 
 int nvshmemi_update_device_state() {
-    int status = 0;
+    int status = NVSHMEMI_SUCCESS;
     int iter;
     nvshmemx_device_lib_init_cb cb;
     void *device_ptr;
     void *transport_device_ptr = NULL;
+
     while (!registered_device_state_cb.empty()) {
         cb = *(registered_device_state_cb.begin());
         registered_device_state_cb.erase(cb);
@@ -443,38 +445,36 @@ int nvshmemi_init_nvshmemi_state(nvshmemi_state_t *state) {
     return status;
 }
 
-static void nvshmemi_detect_nvls_support(nvshmemi_state_t *state) {
+static int nvshmemi_detect_nvls_support(nvshmemi_state_t *state) {
     int status = NVSHMEMX_ERROR_INTERNAL;
     int mc_support = 0;
     int cuda_dev;
-    state->is_platform_nvls = false; /* By default assume it is not supported */
     CUdevice current_dev;
+
+    state->is_platform_nvls = false; /* By default assume it is not supported */
+
     CUDA_RUNTIME_CHECK(cudaGetDevice(&cuda_dev));
     status = CUPFN(nvshmemi_cuda_syms, cuDeviceGet(&current_dev, cuda_dev));
-    if (status != CUDA_SUCCESS) {
-        WARN("NVLS: cuDeviceGet failed\n");
-        return;
-    }
+    NVSHMEMI_NZ_ERROR_JMP(status, NVSHMEMX_ERROR_GPU_NOT_SELECTED, out, "cuDeviceGet failed \n");
 
     status = CUPFN(
         nvshmemi_cuda_syms,
         cuDeviceGetAttribute(
             &mc_support, static_cast<CUdevice_attribute>(CU_DEVICE_ATTRIBUTE_MULTICAST_SUPPORTED),
             current_dev));
-    if (status != CUDA_SUCCESS) {
-        WARN("NVLS: cuDeviceGetAttribute failed\n");
-        return;
-    }
+    NVSHMEMI_NZ_ERROR_JMP(status, NVSHMEMX_ERROR_INTERNAL, out, "cuDeviceGetAttribute failed \n");
 
     if (!mc_support || nvshmemi_options.DISABLE_NVLS) {
         INFO(NVSHMEM_INIT, "NVLS: cuMulticast is not supported on CUDA or disabled by user\n");
-        return;
+        status = NVSHMEMX_SUCCESS;
+        goto out;
     }
 
     if (state->heap_obj != nullptr &&
         dynamic_cast<nvshmemi_symmetric_heap_vidmem_dynamic_vmm *>(state->heap_obj) == nullptr) {
         WARN("NVLS: Unsupported heap kind for NVLS. Supported are: cuMemCreate\n");
-        return;
+        status = NVSHMEMX_SUCCESS;
+        goto out;
     }
 
     /* On newer platform, when using an older CUDA driver at runtime, check if APIs are available */
@@ -488,7 +488,8 @@ static void nvshmemi_detect_nvls_support(nvshmemi_state_t *state) {
         INFO(NVSHMEM_INIT, "NVLS: supported");
     }
 
-    return;
+out:
+    return status;
 }
 
 int nvshmemi_get_cucontext(nvshmemi_state_t *state, nvshmemx_init_attr_t *attr = NULL) {
@@ -946,49 +947,50 @@ static int nvshmemi_mpg_finalize() {
     return 0;
 }
 
-static void nvshmemi_query_cuda_attributes() {
-    int status = 0;
+static int nvshmemi_query_cuda_attributes() {
+    int status = NVSHMEMX_SUCCESS;
+    CUresult curesult;
     int gdrdma_vmm = false, vmm_support = false;
     CUdevice device;
-    status = CUPFN(nvshmemi_cuda_syms, cuCtxGetDevice)(&device);
-    if (status != CUDA_SUCCESS) {
-        fprintf(stderr, "cuCtxGetDevice failed \n");
-        exit(-1);
-    }
 
-    status = CUPFN(nvshmemi_cuda_syms, cuDeviceGetAttribute)(
+    status = CUPFN(nvshmemi_cuda_syms, cuCtxGetDevice)(&device);
+    NVSHMEMI_NZ_ERROR_JMP(status, NVSHMEMX_ERROR_GPU_NOT_SELECTED, out, "cuCtxGetDevice failed \n");
+
+    curesult = CUPFN(nvshmemi_cuda_syms, cuDeviceGetAttribute)(
         &nvshmemi_can_use_cuda_64_bit_stream_memops,
         (CUdevice_attribute)CU_DEVICE_ATTRIBUTE_CAN_USE_64_BIT_STREAM_MEM_OPS, device);
-    if (status != CUDA_SUCCESS) {
+    if (curesult != CUDA_SUCCESS) {
         nvshmemi_can_use_cuda_64_bit_stream_memops = false;
         CUDA_RUNTIME_CHECK(cudaGetLastError());
     }
 
-    status = CUPFN(nvshmemi_cuda_syms, cuDeviceGetAttribute)(
+    curesult = CUPFN(nvshmemi_cuda_syms, cuDeviceGetAttribute)(
         &nvshmemi_can_flush_remote_writes,
         (CUdevice_attribute)CU_DEVICE_ATTRIBUTE_CAN_FLUSH_REMOTE_WRITES, device);
-    if (status != CUDA_SUCCESS) {
+    if (curesult != CUDA_SUCCESS) {
         nvshmemi_can_flush_remote_writes = false;
         CUDA_RUNTIME_CHECK(cudaGetLastError());
     }
 
-    status = CUPFN(nvshmemi_cuda_syms, cuDeviceGetAttribute)(
+    curesult = CUPFN(nvshmemi_cuda_syms, cuDeviceGetAttribute)(
         &vmm_support, (CUdevice_attribute)CU_DEVICE_ATTRIBUTE_VIRTUAL_MEMORY_MANAGEMENT_SUPPORTED,
         device);
-    if (status != CUDA_SUCCESS) {
+    if (curesult != CUDA_SUCCESS) {
         vmm_support = false;
         CUDA_RUNTIME_CHECK(cudaGetLastError());
     }
 
-    status = CUPFN(nvshmemi_cuda_syms, cuDeviceGetAttribute)(
+    curesult = CUPFN(nvshmemi_cuda_syms, cuDeviceGetAttribute)(
         &gdrdma_vmm,
         (CUdevice_attribute)CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_WITH_CUDA_VMM_SUPPORTED, device);
-    if (status != CUDA_SUCCESS) {
+    if (curesult != CUDA_SUCCESS) {
         gdrdma_vmm = false;
         CUDA_RUNTIME_CHECK(cudaGetLastError());
     }
 
     nvshmemi_is_vmm_supported = gdrdma_vmm && vmm_support;
+out:
+    return status;
 }
 
 int nvshmemi_common_init(nvshmemi_state_t *state, nvshmemx_init_attr_t *attr) {
@@ -1047,10 +1049,16 @@ int nvshmemi_common_init(nvshmemi_state_t *state, nvshmemx_init_attr_t *attr) {
                  "Rail optimization not supported for symmetric heap in device memory");
         }
     }
-    status = nvshmemi_get_cucontext(state, attr);
-    NZ_DEBUG_JMP(status, NVSHMEMX_ERROR_INTERNAL, out, "nvshmem get cucontext failed \n");
 
-    nvshmemi_query_cuda_attributes();
+    status = nvshmemi_get_cucontext(state, attr);
+    if (status != NVSHMEMI_SUCCESS) {
+        status = NVSHMEMI_GET_CUCTX_FAILED;
+        NVSHMEMI_DEBUG_PRINT("nvshmem get cucontext failed");
+        goto out;
+    }
+
+    status = nvshmemi_query_cuda_attributes();
+    NVSHMEMI_NZ_ERROR_JMP(status, NVSHMEMX_ERROR_INTERNAL, out, "nvshmem_query_cuda_attributes() failed\n");
 
     if (nvshmemi_options.DISABLE_CUDA_VMM == 0 && nvshmemi_is_vmm_supported &&
         nvshmemi_device_state.symmetric_heap_kind == NVSHMEMI_HEAP_KIND_VIDMEM) {
@@ -1079,15 +1087,16 @@ int nvshmemi_common_init(nvshmemi_state_t *state, nvshmemx_init_attr_t *attr) {
     /* Detect NVLS support before increasing max teams count for NVLS capable platform
      * Depends on heap type being discovered aprior
      */
-    nvshmemi_detect_nvls_support(state);
+    status = nvshmemi_detect_nvls_support(state);
+    NVSHMEMI_NZ_ERROR_JMP(status, NVSHMEMX_ERROR_INTERNAL, out, "nvshmemi_detect_nvls_support() failed\n");
 
     /* Set max teams before reserving heap */
     status = nvshmemi_set_max_teams();
     NVSHMEMI_NZ_ERROR_JMP(status, NVSHMEMX_ERROR_INTERNAL, out, "Requested too many teams.\n");
 
-    nvshmemi_get_mem_handle(&dev_state_ptr, &transport_dev_state_ptr);
-    NVSHMEMI_NULL_ERROR_JMP(dev_state_ptr, status, NVSHMEMX_ERROR_INVALID_VALUE, out,
-                            "Unable to query pointer information.\n");
+    status = nvshmemi_get_device_state_ptrs(&dev_state_ptr, &transport_dev_state_ptr);
+    NVSHMEMI_NZ_ERROR_JMP(status, NVSHMEMX_ERROR_INVALID_VALUE, out, "Unable to get device symbols.\n");
+
     status = register_state_ptr(dev_state_ptr, transport_dev_state_ptr);
     NVSHMEMI_NZ_ERROR_JMP(status, NVSHMEMX_ERROR_INVALID_VALUE, out,
                           "Invalid context pointer passed to nvshmemid_hostlib_init_attr.\n");
@@ -1172,6 +1181,13 @@ int nvshmemi_common_init(nvshmemi_state_t *state, nvshmemx_init_attr_t *attr) {
         NVSHMEMI_NZ_ERROR_JMP(status, NVSHMEMX_ERROR_INTERNAL, out, "mps setup failed \n");
     }
     nvshmemi_boot_handle.barrier(&nvshmemi_boot_handle);
+    CUDA_RUNTIME_CHECK_GOTO(
+        cudaMemcpy(heap_base_array_dptr, (const void *)state->heap_obj->get_local_pe_base(),
+                   sizeof(void *) * state->npes, cudaMemcpyHostToDevice),
+        status, out);
+    // Reset job_connectivity.
+    status = set_job_connectivity(state);
+    NVSHMEMI_NZ_ERROR_JMP(status, NVSHMEMX_ERROR_INTERNAL, out, "set_job_connectivity failed \n");
 
     nvshmemi_update_device_state();
     nvshmemi_is_device_state_ready = 1;
@@ -1183,8 +1199,9 @@ out:
 
 int nvshmemi_try_common_init(nvshmemi_state_t *state, nvshmemx_init_attr_t *attr) {
     int status = 0;
+
     status = nvshmemi_common_init(state, attr);
-    if (status) {
+    if (status == NVSHMEMI_GET_CUCTX_FAILED) {
         INFO(NVSHMEM_INIT, "nvshmemi_common_init failed, continuing");
         status = 0;
     }
@@ -1192,14 +1209,19 @@ int nvshmemi_try_common_init(nvshmemi_state_t *state, nvshmemx_init_attr_t *attr
     return status;
 }
 
-void nvshmemi_check_state_and_init() {
-    if (!nvshmemi_device_state.nvshmemi_is_nvshmem_bootstrapped)
-        NVSHMEMI_ERROR_EXIT("nvshmem API called before nvshmem_init \n");
+int nvshmemi_check_state_and_init() {
+    if (!nvshmemi_device_state.nvshmemi_is_nvshmem_bootstrapped) {
+        NVSHMEMI_DEBUG_PRINT("nvshmem API called before nvshmem_init \n");
+        return NVSHMEMI_NOT_BOOTSTRAPPED;
+    }
     if (!nvshmemi_device_state.nvshmemi_is_nvshmem_initialized) {
-        if (nvshmemi_common_init(nvshmemi_state)) {
-            NVSHMEMI_ERROR_EXIT("nvshmem initialization failed, exiting \n");
+        int ret = nvshmemi_common_init(nvshmemi_state);
+        if (ret) {
+            NVSHMEMI_DEBUG_PRINT("nvshmem initialization failed, exiting \n");
+            return ret;
         }
     }
+    return NVSHMEMI_SUCCESS;
 }
 
 int nvshmemid_init_status() {
@@ -1340,7 +1362,7 @@ void nvshmemid_hostlib_finalize(void *device_ctx, void *transport_device_ctx) {
     nvshmemi_init_counter--;
     if (nvshmemi_init_counter != 0) return;
 
-    nvshmemi_get_mem_handle(&dev_state_ptr, &transport_dev_state_ptr);
+    nvshmemi_get_device_state_ptrs(&dev_state_ptr, &transport_dev_state_ptr);
     NVSHMEMI_NULL_ERROR_JMP(dev_state_ptr, status, NVSHMEMX_ERROR_INVALID_VALUE, out,
                             "Unable to query pointer information.\n");
     status = unregister_state_ptr(dev_state_ptr, transport_dev_state_ptr);
@@ -1620,7 +1642,7 @@ int set_job_connectivity(nvshmemi_state_t *state) {
     nvshmemi_job_connectivity = NVSHMEMI_JOB_GPU_LDST_ATOMICS;
     for (int i = 0; i < state->npes; i++) {
         int peer_connectivity = NVSHMEMI_JOB_GPU_PROXY;
-        void *enforce_cst = NULL;
+        bool enforce_cst = false;
         // for each PE, pick the best connectivity of any transport
         for (int j = 0; j < state->num_initialized_transports; j++) {
             if (state->transports[j]) {
@@ -1634,6 +1656,9 @@ int set_job_connectivity(nvshmemi_state_t *state) {
                 else if (state->transports[j]->cap[i] &
                          (NVSHMEM_TRANSPORT_CAP_GPU_WRITE | NVSHMEM_TRANSPORT_CAP_GPU_READ |
                           NVSHMEM_TRANSPORT_CAP_GPU_ATOMICS)) {
+                    if (state->transports[j]->type == NVSHMEM_TRANSPORT_LIB_CODE_IBGDA) {
+                        enforce_cst = true;
+                    }
                     peer_connectivity = std::min(peer_connectivity, (int)NVSHMEMI_JOB_GPU_PROXY);
                     /* Note, these are not mapped atomics. They would be atomics issued from the GPU
                      * over a remote transport (e.g. IBGDA). */
@@ -1644,7 +1669,7 @@ int set_job_connectivity(nvshmemi_state_t *state) {
 #endif
                 else {
                     peer_connectivity = std::min(peer_connectivity, (int)NVSHMEMI_JOB_GPU_PROXY);
-                    enforce_cst = (void *)state->transports[j]->host_ops.enforce_cst_at_target;
+                    enforce_cst = state->transports[j]->host_ops.enforce_cst_at_target == NULL ? false : true;
                 }
             }
         }
@@ -1935,6 +1960,12 @@ int nvshmemx_qp_create(int num_qps, nvshmemx_qp_handle_t **out_qp_array) {
     for (int j = 0; j < num_qps; j++) {
         out_qp_array_local[j] = NVSHMEMX_QP_DEFAULT;
     }
+
+    /* completely flush all I/O before modifying qpair states */
+    nvshmemi_barrier_all();
+    nvshmemx_quiet_on_stream(
+        nvshmemi_state->my_stream); /* wait for signal ops from barrier to complete */
+    status = cudaDeviceSynchronize();
 
     for (int i = 0; i < nvshmemi_state->num_initialized_transports; i++) {
         nvshmem_transport_t transport = (nvshmem_transport_t)nvshmemi_state->transports[i];

@@ -31,7 +31,7 @@
 #include "device_host_transport/nvshmem_common_transport.h"                // for g_elem_t
 #include "internal/host/debug.h"                                           // for INFO
 #include "internal/host/nvshmem_internal.h"                                // for nvshm...
-#include "internal/host/error_codes_internal.h"                            // for NVSHM...
+#include "internal/common/error_codes_internal.h"                          // for NVSHM...
 #include "internal/host/custom_malloc.h"                                   // for mspace
 #include "internal/host/nvshmem_nvtx.hpp"                                  // for nvtx_...
 #include "internal/host/nvshmemi_symmetric_heap.hpp"                       // for nvshm...
@@ -55,6 +55,8 @@
 static_assert(sizeof(CUmemGenericAllocationHandle) <= NVSHMEM_MEM_HANDLE_SIZE,
               "sizeof(CUmemGenericAllocationHandle) <= NVSHMEM_MEM_HANDLE_SIZE");
 
+long nvshmem_error = 0;
+
 /**
  * By OpenSHMEM spec standard, coll sync are not needed
  * if size == 0 or if ptr is NULL
@@ -69,13 +71,14 @@ std::vector<nvshmemi_shared_memory_info_t> nvshmemi_symmetric_heap_sysmem_static
 nvshmemi_mem_remote_transport *nvshmemi_mem_remote_transport::remote_objref_;
 nvshmemi_mem_p2p_transport *nvshmemi_mem_p2p_transport::p2p_objref_;
 
-void nvshmemi_init_symmetric_heap(nvshmemi_state_t *state, bool is_vmm, int heap_kind) {
+int nvshmemi_init_symmetric_heap(nvshmemi_state_t *state, bool is_vmm, int heap_kind) {
+    int status = NVSHMEMX_SUCCESS;
     nvshmemi_symmetric_heap_sysmem_static_shm *nvshmemi_sysmem_shm = nullptr;
     nvshmemi_symmetric_heap_vidmem_dynamic_vmm *nvshmemi_vidmem_vmm = nullptr;
     nvshmemi_symmetric_heap_vidmem_static_pinned *nvshmemi_vidmem_static = nullptr;
 
     if (state->heap_obj != nullptr) {
-        return;
+        return status;
     }
 
     if (nvshmemi_vidmem_vmm == nullptr && is_vmm) {
@@ -93,6 +96,7 @@ void nvshmemi_init_symmetric_heap(nvshmemi_state_t *state, bool is_vmm, int heap
         NVSHMEMI_ERROR_EXIT("Requested Heap Kind: %d(0-VIDMEM,1-SYSMEM,>3-INVALID), with VMM: %s\n",
                             heap_kind, (is_vmm ? "Yes" : "No"));
     }
+    return status;
 }
 
 void nvshmemi_fini_symmetric_heap(nvshmemi_state_t *state) {
@@ -291,9 +295,12 @@ int nvshmemi_symmetric_heap::map_heap_range_by_size(void *buf, size_t size) {
                      buf, size, i, j);
                 status = map_heap_range_by_pe(i, j, (char *)buf, size);
                 if (status) {
-                    // map operation failed, remove cap of transport
-                    state->transports[j]->cap[i] ^= NVSHMEM_TRANSPORT_CAP_MAP;
+                    // map operation failed, remove ALL map-related capabilities
+                    state->transports[j]->cap[i] &=
+                        ~(NVSHMEM_TRANSPORT_CAP_MAP | NVSHMEM_TRANSPORT_CAP_MAP_GPU_ST |
+                          NVSHMEM_TRANSPORT_CAP_MAP_GPU_LD | NVSHMEM_TRANSPORT_CAP_MAP_GPU_ATOMICS);
                     status = 0;
+                    peer_heap_base_p2p_[i] = NULL;
                     continue;
                 }
 
@@ -1820,7 +1827,11 @@ void *nvshmemi_symmetric_heap_vidmem_dynamic_vmm::allocate_symmetric_memory(size
 
     ptr = allocate_virtual_memory_from_mspace(size, count, alignment, type);
     if ((size > 0) && (ptr == NULL)) {
-        status = allocate_physical_memory_to_heap(size + alignment);
+        if (type == NVSHMEMX_CALLOC) {
+            status = allocate_physical_memory_to_heap((count*size) + alignment);
+        } else {
+            status = allocate_physical_memory_to_heap(size + alignment);
+        }
         NVSHMEMI_NZ_ERROR_JMP(status, NVSHMEMX_ERROR_INTERNAL, out,
                               "allocate_physical_memory_to_heap failed\n");
         ptr = allocate_virtual_memory_from_mspace(size, count, alignment, type);
@@ -1909,7 +1920,7 @@ void *nvshmemi_symmetric_heap_vidmem_dynamic_vmm::mmap_mem(void *buf_ptr, size_t
                               "Not enough space for mmaping buffer %p size %zu\n", buf_ptr, size);
         buf_start = (char *)mmap_base_ - get_mmap_allocated_range() - size;
         ptr = (void *)buf_start;
-        INFO(NVSHMEM_MEM, "Need to extend mmap space. start ptr: %p for %zu bytes",
+        INFO(NVSHMEM_MEM, "type: %s Need to extend mmap space. start ptr: %p for %zu bytes",
              typeid(decltype(this)).name(), buf_start, size);
     }
 
@@ -2144,6 +2155,7 @@ out:
 int nvshmemi_symmetric_heap_vidmem_dynamic_vmm::check_user_buffer_for_mmap(
     void *ptr, size_t &size, unsigned int *ptr_mem_type) {
     int status = 0;
+    int cuMemRelease_status = 0;
     unsigned int ptrAttr;
     nvshmemi_state_t *state = get_state();
     size_t userAllocGran;
@@ -2151,10 +2163,17 @@ int nvshmemi_symmetric_heap_vidmem_dynamic_vmm::check_user_buffer_for_mmap(
     CUmemGenericAllocationHandle userAllocHandle;
 
     status = (size == 0);
-    NVSHMEMI_NZ_ERROR_JMP(status, NVSHMEMX_ERROR_SYMMETRY, out, "size argument is zero\n");
+    NVSHMEMI_NZ_ERROR_JMP(status, NVSHMEMX_ERROR_SYMMETRY, return_out, "size argument is zero\n");
 
     status = is_symmetric(size);
-    NVSHMEMI_NZ_ERROR_JMP(status, NVSHMEMX_ERROR_SYMMETRY, out, "symmetry check for size failed\n");
+    NVSHMEMI_NZ_ERROR_JMP(status, NVSHMEMX_ERROR_SYMMETRY, return_out, "symmetry check for size failed\n");
+
+    status = size % mem_granularity_;
+    NVSHMEMI_NZ_ERROR_JMP(
+        status, NVSHMEMX_ERROR_INVALID_VALUE, return_out,
+        "user buffer %p size %zu is not a multiple of heap granularity %zu. Please adjust the user "
+        "buffer size or update NVSHMEM_CUMEM_GRANULARITY",
+        ptr, size, mem_granularity_);
 
     // check if buffer (ptr) is allocated from cuMemCreate
     status = CUPFN(nvshmemi_cuda_syms, cuMemRetainAllocationHandle(&userAllocHandle, ptr));
@@ -2217,17 +2236,14 @@ int nvshmemi_symmetric_heap_vidmem_dynamic_vmm::check_user_buffer_for_mmap(
     NVSHMEMI_NE_ERROR_JMP(status, CUDA_SUCCESS, NVSHMEMX_ERROR_INTERNAL, out,
                           "Failed to get allocation granularity of user buffer %p\n", ptr);
 
-    if (size % mem_granularity_) {
-        WARN(
-            "user buffer %p size %zu is not a multiple of heap granularity %zu, "
-            "rounding up to %zu\n",
-            ptr, size, mem_granularity_, ((size + mem_granularity_ - 1) / mem_granularity_) * mem_granularity_);
-        size = ((size + mem_granularity_ - 1) / mem_granularity_) * mem_granularity_;
-    }
 out:
-    status = CUPFN(nvshmemi_cuda_syms, cuMemRelease(userAllocHandle));
-    NVSHMEMI_NE_ERROR_JMP(status, CUDA_SUCCESS, NVSHMEMX_ERROR_INTERNAL, out,
+    cuMemRelease_status = CUPFN(nvshmemi_cuda_syms, cuMemRelease(userAllocHandle));
+    if (!status) {
+       status = cuMemRelease_status;
+       NVSHMEMI_NE_ERROR_JMP(cuMemRelease_status, CUDA_SUCCESS, NVSHMEMX_ERROR_INTERNAL, return_out,
                           "cuMemRelease failed \n");
+    }
+return_out:
     return status;
 }
 
@@ -2291,7 +2307,11 @@ void *nvshmem_malloc(size_t size) {
     NVTX_FUNC_RANGE_IN_GROUP(ALLOC);
 
     NVSHMEMU_THREAD_CS_ENTER();
-    nvshmemi_check_state_and_init();
+    int ret = nvshmemi_check_state_and_init();
+    if (ret) {
+        nvshmem_error = 1;
+        goto exit_and_return;
+    }
 
     if (NVSHMEMI_IS_NO_ACTION_BY_SIZE(size)) {
         goto exit_and_return;
@@ -2313,9 +2333,13 @@ void *nvshmem_calloc(size_t count, size_t size) {
     NVTX_FUNC_RANGE_IN_GROUP(ALLOC);
 
     NVSHMEMU_THREAD_CS_ENTER();
-    nvshmemi_check_state_and_init();
+    int ret = nvshmemi_check_state_and_init();
+    if (ret) {
+        nvshmem_error = 1;
+        goto exit_and_return;
+    }
 
-    if (NVSHMEMI_IS_NO_ACTION_BY_SIZE(size)) {
+    if (NVSHMEMI_IS_NO_ACTION_BY_SIZE(count*size)) {
         goto exit_and_return;
     }
 
@@ -2335,7 +2359,11 @@ void *nvshmem_align(size_t alignment, size_t size) {
     NVTX_FUNC_RANGE_IN_GROUP(ALLOC);
 
     NVSHMEMU_THREAD_CS_ENTER();
-    nvshmemi_check_state_and_init();
+    int ret = nvshmemi_check_state_and_init();
+    if (ret) {
+        nvshmem_error = 1;
+        goto exit_and_return;
+    }
 
     if (NVSHMEMI_IS_NO_ACTION_BY_SIZE(size)) {
         goto exit_and_return;
@@ -2409,14 +2437,18 @@ void *nvshmemx_buffer_register_symmetric(void *buf_ptr, size_t size, int flags) 
     NVTX_FUNC_RANGE_IN_GROUP(ALLOC);
 
     NVSHMEMU_THREAD_CS_ENTER();
-    nvshmemi_check_state_and_init();
+    int ret = nvshmemi_check_state_and_init();
+    if (ret) {
+        nvshmem_error = 1;
+        goto exit_and_return;
+    }
 
     ptr = nvshmemi_state->heap_obj->mmap_mem(buf_ptr, size, flags);
 
     nvshmemi_barrier_all();
 
+exit_and_return:
     NVSHMEMU_THREAD_CS_EXIT();
-
     return ptr;
 }
 

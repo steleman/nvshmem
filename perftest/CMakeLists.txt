@@ -1,4 +1,10 @@
 cmake_minimum_required(VERSION 3.19)
+
+# Set CMP0177 for path normalization in install() (CMake 3.31+)
+if(POLICY CMP0177)
+  cmake_policy(SET CMP0177 NEW)
+endif()
+
 set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 
 set(NVSHMEM_PERFTEST_TLD ${CMAKE_CURRENT_SOURCE_DIR})
@@ -109,14 +115,21 @@ if(NOT SubBuild)
   if(NVSHMEM_SHMEM_SUPPORT)
     find_library(
       SHMEM_LIB
-      NAMES oshmem
+      NAMES shmem oshmem
       HINTS ${SHMEM_HOME}
-      PATH_SUFFIXES lib lib64)
+      PATH_SUFFIXES lib64 lib)
     find_path(SHMEM_INCLUDE NAME shmem.h HINTS ${SHMEM_HOME}
-              PATH_SUFFIXES include
-    )
+              PATH_SUFFIXES include)
     add_library(shmem IMPORTED INTERFACE)
+    add_library(shmemc-ucx IMPORTED INTERFACE)
+    add_library(shmemt IMPORTED INTERFACE)
+    add_library(shmemu IMPORTED INTERFACE)
+    add_library(shcoll IMPORTED INTERFACE)
     target_link_libraries(shmem INTERFACE ${SHMEM_LIB})
+    target_link_libraries(shmemc-ucx INTERFACE ${SHMEM_LIB})
+    target_link_libraries(shmemt INTERFACE ${SHMEM_LIB})
+    target_link_libraries(shmemu INTERFACE ${SHMEM_LIB})
+    target_link_libraries(shcoll INTERFACE ${SHMEM_LIB})
     target_include_directories(shmem INTERFACE ${SHMEM_INCLUDE})
     if(NVSHMEM_MPI_SUPPORT)
       separate_arguments(SHMEM_C_LINK_FLAGS NATIVE_COMMAND "${MPI_C_LINK_FLAGS}")

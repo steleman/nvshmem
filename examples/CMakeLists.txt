@@ -92,27 +92,31 @@ if(NOT SubBuild)
     find_package(MPI REQUIRED)
   endif()
 
-  # Unused by any examples currently compiled.
-# TODO: Resurrect the shmem-based-init example.
-#  if(NVSHMEM_SHMEM_SUPPORT)
-#    find_library(
-#      SHMEM_LIB
-#      NAMES oshmem
-#      HINTS ${SHMEM_HOME}
-#      PATH_SUFFIXES lib lib64)
-#    find_path(SHMEM_INCLUDE NAME shmem.h HINTS ${SHMEM_HOME}
-#              PATH_SUFFIXES include
-#    )
-#    add_library(shmem IMPORTED INTERFACE)
-#    target_link_libraries(shmem INTERFACE ${SHMEM_LIB})
-#    target_include_directories(shmem INTERFACE ${SHMEM_INCLUDE})
-#    if(NVSHMEM_MPI_SUPPORT)
-#      separate_arguments(SHMEM_C_LINK_FLAGS NATIVE_COMMAND "${MPI_C_LINK_FLAGS}")
-#      target_link_options(shmem INTERFACE ${SHMEM_C_LINK_FLAGS})
-#      target_compile_definitions(shmem INTERFACE ${MPI_C_COMPILE_DEFINITIONS})
-#      target_compile_options(shmem INTERFACE ${MPI_C_COMPILE_OPTIONS})
-#    endif()
-#  endif()
+   if(NVSHMEM_SHMEM_SUPPORT)
+     find_library(SHMEM_LIB
+                  NAMES shmem oshmem
+                  HINTS ${SHMEM_HOME}
+                  PATH_SUFFIXES lib64 lib)
+     find_path(SHMEM_INCLUDE NAME shmem.h HINTS ${SHMEM_HOME}
+               PATH_SUFFIXES include)
+     add_library(shmem IMPORTED INTERFACE)
+     add_library(shmemc-ucx IMPORTED INTERFACE)
+     add_library(shmemt IMPORTED INTERFACE)
+     add_library(shmemu IMPORTED INTERFACE)
+     add_library(shcoll IMPORTED INTERFACE)
+     target_link_libraries(shmem INTERFACE ${SHMEM_LIB})
+     target_link_libraries(shmemc-ucx INTERFACE ${SHMEM_LIB})
+     target_link_libraries(shmemt INTERFACE ${SHMEM_LIB})
+     target_link_libraries(shmemu INTERFACE ${SHMEM_LIB})
+     target_link_libraries(shcoll INTERFACE ${SHMEM_LIB})
+     target_include_directories(shmem INTERFACE ${SHMEM_INCLUDE})
+     if(NVSHMEM_MPI_SUPPORT)
+       separate_arguments(SHMEM_C_LINK_FLAGS NATIVE_COMMAND "${MPI_C_LINK_FLAGS}")
+       target_link_options(shmem INTERFACE ${SHMEM_C_LINK_FLAGS})
+       target_compile_definitions(shmem INTERFACE ${MPI_C_COMPILE_DEFINITIONS})
+       target_compile_options(shmem INTERFACE ${MPI_C_COMPILE_OPTIONS})
+     endif()
+   endif()
 endif()
 
 if(CUDAToolkit_VERSION_MAJOR LESS 13)

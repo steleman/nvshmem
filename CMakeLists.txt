@@ -20,7 +20,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 # Set the possible values of build type
-set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "debug" "release"
+set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release"
              "MinSizeRel" "RelWithDebInfo")
 
 ## CUDA Selection Start
@@ -45,11 +45,9 @@ if (NOT DEFINED CUDA_ARCHITECTURES)
   set(CUDA_ARCHITECTURES_UNDEFINED 1)
 endif()
 
-project(
-  NVSHMEM
-  LANGUAGES CUDA CXX C
-  VERSION 3.5.0.0
-)
+project(NVSHMEM
+        LANGUAGES CUDA CXX C
+        VERSION 3.5.19.1)
 
 if(NOT (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang") OR
    NOT (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
@@ -93,7 +91,7 @@ endif()
 
 if(NVSHMEM_BUILD_BITCODE_LIBRARY)
   if(NVSHMEM_CLANG_DIR)
-    find_package(Clang CONFIG PATHS ${NVSHMEM_CLANG_DIR} NO_DEFAULT_PATH REQUIRED)
+    find_package(Clang CONFIG PATHS ${NVSHMEM_CLANG_DIR} REQUIRED)
   else()
     find_package(Clang CONFIG REQUIRED)
   endif()
@@ -115,7 +113,7 @@ endif()
 if(NVSHMEM_USE_GDRCOPY)
   find_path(
     GDRCOPY_INCLUDE gdrapi.h
-    PATHS /usr/local/gdrcopy /usr/local/gdrdrv ${CMAKE_SOURCE_DIR}
+    PATHS /usr/include /usr/local/gdrcopy /usr/local/gdrdrv ${CMAKE_SOURCE_DIR}
     HINTS ${CMAKE_SOURCE_DIR} /usr/local/gdrcopy /usr/local/gdrdrv ${GDRCOPY_HOME}
     PATH_SUFFIXES include_gdrcopy include
   )
@@ -124,14 +122,21 @@ endif()
 if(NVSHMEM_SHMEM_SUPPORT)
   find_library(
     SHMEM_LIB
-    NAMES oshmem
+    NAMES shmem oshmem
     HINTS ${SHMEM_HOME}
-    PATH_SUFFIXES lib lib64)
+    PATH_SUFFIXES lib64 lib)
   find_path(SHMEM_INCLUDE NAME shmem.h HINTS ${SHMEM_HOME}
-            PATH_SUFFIXES include
-  )
+            PATH_SUFFIXES include)
   add_library(shmem IMPORTED INTERFACE)
+  add_library(shmemc-ucx IMPORTED INTERFACE)
+  add_library(shmemt IMPORTED INTERFACE)
+  add_library(shmemu IMPORTED INTERFACE)
+  add_library(shcoll IMPORTED INTERFACE)
   target_link_libraries(shmem INTERFACE ${SHMEM_LIB})
+  target_link_libraries(shmemc-ucx INTERFACE ${SHMEM_LIB})
+  target_link_libraries(shmemt INTERFACE ${SHMEM_LIB})
+  target_link_libraries(shmemu INTERFACE ${SHMEM_LIB})
+  target_link_libraries(shcoll INTERFACE ${SHMEM_LIB})
   target_include_directories(shmem INTERFACE ${SHMEM_INCLUDE})
   if(NVSHMEM_MPI_SUPPORT)
     separate_arguments(SHMEM_C_LINK_FLAGS NATIVE_COMMAND "${MPI_C_LINK_FLAGS}")
@@ -146,16 +151,47 @@ endif()
 # set these flags to add a RUNPATH entry to the libraries that points at the lib dir in a portable way.
 set(CMAKE_SKIP_BUILD_RPATH  FALSE)
 set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
-set(CMAKE_INSTALL_RPATH "$\{ORIGIN\}")
+
+if (NOT CMAKE_INSTALL_RPATH)
+  set(CMAKE_INSTALL_RPATH "$\{ORIGIN\}")
+endif()
+
 set(CMAKE_EXE_LINKER_FLAGS "-Wl,--enable-new-dtags")
+
+if (${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
+  add_definitions(-D_GNU_SOURCE)
+  add_definitions(-D_XOPEN_SOURCE=700)
+  if (${CMAKE_C_COMPILER_ID} STREQUAL "GNU")
+    add_compile_options(-g)
+    add_compile_options(-O3)
+    set(CMAKE_C_STANDARD 11)
+    set(CMAKE_CXX_STANDARD 17)
+    if (${CMAKE_BUILD_TYPE} STREQUAL "Release")
+      add_definitions(-DNDEBUG)
+    endif()
+  elseif(${CMAKE_C_COMPILER_ID} STREQUAL "Clang")
+    add_compile_options(-g)
+    add_compile_options(-O3)
+    set(CMAKE_C_STANDARD 11)
+    set(CMAKE_CXX_STANDARD 17)
+    if (${CMAKE_BUILD_TYPE} STREQUAL "Release")
+      add_definitions(-DNDEBUG)
+    endif()
+  endif()
+endif()
 
 cmake_policy(SET CMP0105 NEW)
 set(CMAKE_CUDA_DEVICE_COMPILER_WRAPPER_FLAG "")
 
+# Set CMP0177 for path normalization in install() (CMake 3.31+)
+if(POLICY CMP0177)
+  cmake_policy(SET CMP0177 NEW)
+endif()
+
 configure_file(License.txt License.txt COPYONLY)
 
 set(INCLUDE_INSTALL_DIR include/)
-set(LIB_INSTALL_DIR lib/)
+set(LIB_INSTALL_DIR lib64/)
 set(BIN_INSTALL_DIR bin/)
 
 configure_package_config_file(
@@ -181,3 +217,4 @@ endif()
 if (NVSHMEM_BUILD_PYTHON_LIB)
   add_subdirectory(nvshmem4py)
 endif()
+

@@ -1,7 +1,7 @@
 /*************************************************************************
  * Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
  *
- * See LICENSE.txt for license information
+ * See License.txt for license information
  ************************************************************************/
 
 #include <cuda.h>  // for CUresult
@@ -16,7 +16,7 @@
 #include <driver_types.h>                                // for cudaError_t
 #include <stdio.h>                                       // for NULL, snprintf
 #include "internal/host/debug.h"                         // for WARN, INFO, NVSHMEM...
-#include "internal/host/error_codes_internal.h"          // for NVSHMEMI_SYSTEM_ERROR
+#include "internal/common/error_codes_internal.h"          // for NVSHMEMI_SYSTEM_ERROR
 #include "internal/host/util.h"                          // for nvshmemi_options
 #include "internal/host_transport/cudawrap.h"            // for nvshmemi_cuda_fn_table
 #include "bootstrap_host_transport/env_defs_internal.h"  // for nvshmemi_options_s

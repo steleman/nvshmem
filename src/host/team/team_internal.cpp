@@ -67,35 +67,38 @@ using namespace nvls;
 
 static long *nvshmemi_team_get_sync_counter(nvshmemi_team_t *team);
 
-long nvshmemi_max_teams;
+long nvshmemi_max_teams = 0;
 static long N_PSYNC_BYTES = 32; /* N_PSYNC_BYTES * CHAR_NBIT == max_teams supported */
 
-nvshmemi_team_t *nvshmemi_team_world;
-nvshmemi_team_t *nvshmemi_team_shared;
-nvshmemi_team_t *nvshmemi_team_node;
-nvshmemi_team_t *nvshmemi_team_same_mype_node;
-nvshmemi_team_t *nvshmemi_team_same_gpu;
-nvshmemi_team_t *nvshmemi_team_gpu_leaders;
+nvshmemi_team_t *nvshmemi_team_world = nullptr;
+nvshmemi_team_t *nvshmemi_team_shared = nullptr;
+nvshmemi_team_t *nvshmemi_team_node = nullptr;
+nvshmemi_team_t *nvshmemi_team_same_mype_node = nullptr;
+nvshmemi_team_t *nvshmemi_team_same_gpu = nullptr;
+nvshmemi_team_t *nvshmemi_team_gpu_leaders = nullptr;
 
-nvshmemi_team_t *nvshmemi_device_team_world, *nvshmemi_device_team_shared,
-    *nvshmemi_device_team_node, *nvshmemi_device_team_same_mype_node,
-    *nvshmemi_device_team_same_gpu, *nvshmemi_device_team_gpu_leaders;
+nvshmemi_team_t *nvshmemi_device_team_world = nullptr,
+                *nvshmemi_device_team_shared = nullptr,
+                *nvshmemi_device_team_node = nullptr,
+                *nvshmemi_device_team_same_mype_node = nullptr,
+                *nvshmemi_device_team_same_gpu = nullptr,
+                *nvshmemi_device_team_gpu_leaders = nullptr;
 
-nvshmemi_team_t **nvshmemi_team_pool;
-long *nvshmemi_psync_pool;
-long *nvshmemi_sync_counter;
+nvshmemi_team_t **nvshmemi_team_pool = nullptr;
+long *nvshmemi_psync_pool = nullptr;
+long *nvshmemi_sync_counter = nullptr;
 
-nvshmemi_team_t **nvshmemi_device_team_pool;
+nvshmemi_team_t **nvshmemi_device_team_pool = nullptr;
 
-static unsigned char *psync_pool_avail;
-static unsigned char *psync_pool_avail_reduced;
-static unsigned char *device_psync_pool_avail;
-static unsigned char *device_psync_pool_avail_reduced;
+static unsigned char *psync_pool_avail = nullptr;
+static unsigned char *psync_pool_avail_reduced = nullptr;
+static unsigned char *device_psync_pool_avail = nullptr;
+static unsigned char *device_psync_pool_avail_reduced = nullptr;
 
-static int *team_ret_val;
-static int *team_ret_val_reduced;
-static int *device_team_ret_val;
-static int *device_team_ret_val_reduced;
+static int *team_ret_val = nullptr;
+static int *team_ret_val_reduced = nullptr;
+static int *device_team_ret_val = nullptr;
+static int *device_team_ret_val_reduced = nullptr;
 
 nvshmemi_team_creation_psync_t *nvshmemi_team_creation_psync = NULL;
 
@@ -621,7 +624,7 @@ static inline size_t get_psync_len_per_team() {
        same way as in reduce. The other fator of 2 is because when using LL double the space is
        needed to fuse flag with data. Npes is added for p2p_sync_on_stream space. */
 
-    size_t ans = (2 * NVSHMEMI_SYNC_SIZE +
+    size_t ans = (4 * NVSHMEMI_SYNC_SIZE /* 2 for nvshmem_sync impl and 2 for sync usage during nvshmem team init */ +
                   nvshmemi_device_state.gpu_coll_env_params_var.reduce_scratch_size / sizeof(long) +
                   NVSHMEMI_BCAST_SYNC_SIZE + fcollect_sync_size + 2 * NVSHMEMI_ALLTOALL_SYNC_SIZE +
                   fcollect_ll128_sync_size + nvshmemi_state->npes);
@@ -907,7 +910,7 @@ void nvshmemi_duplicate_team(nvshmem_team_t team, nvshmemi_team_t *my_team) {
         NVSHMEMU_FOR_EACH(i, max_required_duplicate_teams - 1) {
             nvshmemi_team_split_strided(nvshmemi_team_pool[team], 0, 1, nvshmem_team_n_pes(team), NULL, 0,
                                        &(my_team->team_dups[i + 1]), true);
-            INFO(NVSHMEM_TEAM, "Duplicate team ID: %d of parent team: %d; duplicate team: %zu / %zu\n",
+            INFO(NVSHMEM_TEAM, "Duplicate team ID: %d of parent team: %d; duplicate team: %zu / %d\n",
                  my_team->team_dups[i + 1], my_team->team_idx, i, max_required_duplicate_teams);
             if (my_team->team_dups[i + 1] == NVSHMEM_TEAM_INVALID) {
                 NVSHMEMI_ERROR_EXIT(
@@ -981,6 +984,14 @@ int nvshmemi_team_init(void) {
     }
     INFO(NVSHMEM_INIT, "P2P list: %s", ss.str().c_str());
 
+    /* allocate the team */
+    if (nvshmemi_team_allocate_team(&nvshmemi_team_shared, &nvshmemi_device_team_shared,
+                                    n_p2p_pes) != NVSHMEMX_SUCCESS) {
+        return NVSHMEMX_ERROR_OUT_OF_MEMORY;
+    }
+    nvshmemi_team_shared->team_idx = NVSHMEM_TEAM_SHARED_INDEX;
+    NVSHMEMI_TEAM_DUP_INITIALIZER(nvshmemi_team_shared, NVSHMEM_TEAM_SHARED_INDEX);
+
     /* Make sure that n_p2p_pes is same for all PEs to form TEAM_SHARED */
     int *n_p2p_pes_all = (int *)malloc(nvshmemi_team_world->size * sizeof(int));
     int *p2p_pe_list_all = (int *)malloc(sizeof(int) * n_p2p_pes * nvshmemi_team_world->size);
@@ -1017,12 +1028,6 @@ int nvshmemi_team_init(void) {
     }
 
     /* Initialize NVSHMEM_TEAM_SHARED */
-    if (nvshmemi_team_allocate_team(&nvshmemi_team_shared, &nvshmemi_device_team_shared,
-                                    n_p2p_pes) != NVSHMEMX_SUCCESS) {
-        return NVSHMEMX_ERROR_OUT_OF_MEMORY;
-    }
-    nvshmemi_team_shared->team_idx = NVSHMEM_TEAM_SHARED_INDEX;
-    NVSHMEMI_TEAM_DUP_INITIALIZER(nvshmemi_team_shared, NVSHMEM_TEAM_SHARED_INDEX);
     nvshmemi_team_shared->my_pe = my_idx_in_p2p_list;
     nvshmemi_team_shared->start = p2p_pe_list[0];
     nvshmemi_team_shared->stride = n_p2p_pes > 1 ? (p2p_pe_list[1] - p2p_pe_list[0]) : 1;
@@ -1572,11 +1577,11 @@ int nvshmemi_team_create_internal_teams(nvshmemi_team_t *myteam) {
 }
 
 static void nvshmemi_team_reset_psync(nvshmemi_team_t *myteam) {
-    long *psync = &nvshmemi_team_get_psync(myteam, SYNC)[NVSHMEMI_SYNC_SIZE];
+    long *psync = &nvshmemi_team_get_psync(myteam, SYNC)[2 * NVSHMEMI_SYNC_SIZE];
     long *sync_counter = &nvshmemi_team_get_sync_counter(myteam)[1];
 
     nvshmemi_call_init_array_kernel<long>(sync_counter, 1, 1);
-    nvshmemi_call_init_array_kernel<long>(psync, NVSHMEMI_SYNC_SIZE, NVSHMEMI_SYNC_VALUE);
+    nvshmemi_call_init_array_kernel<long>(psync, 2 * NVSHMEMI_SYNC_SIZE, NVSHMEMI_SYNC_VALUE);
     CUDA_RUNTIME_CHECK(cudaDeviceSynchronize());
 }
 
@@ -1585,7 +1590,7 @@ int nvshmemi_team_set_team_idx_v1(nvshmemi_team_t *myteam, nvshmemi_team_t *myde
     INFO(NVSHMEM_COLL, "entering nvshmemi_team_set_team_idx_v1\n");
     int status = NVSHMEMX_SUCCESS;
     long *psync_reduce = nvshmemi_team_get_psync(parent_team, REDUCE);
-    long *psync = &nvshmemi_team_get_psync(parent_team, SYNC)[NVSHMEMI_SYNC_SIZE];
+    long *psync = &nvshmemi_team_get_psync(parent_team, SYNC)[2 * NVSHMEMI_SYNC_SIZE];
     long *sync_counter = &nvshmemi_team_get_sync_counter(parent_team)[1];
     int team_idx = TEAM_SCALAR_INVALID;
 
@@ -2441,33 +2446,33 @@ long *nvshmemi_team_get_psync(nvshmemi_team_t *team, nvshmemi_team_op_t op) {
             return team_psync;
         case REDUCE:
             return &team_psync
-                [2 * NVSHMEMI_SYNC_SIZE +
+                [4 * NVSHMEMI_SYNC_SIZE +
                  (((nvshmemi_device_state.gpu_coll_env_params_var.reduce_scratch_size / 2) /
                    sizeof(long)) *
                   (team->rdxn_count % 2))];
         case BCAST:
-            return &team_psync[2 * NVSHMEMI_SYNC_SIZE +
+            return &team_psync[4 * NVSHMEMI_SYNC_SIZE +
                                nvshmemi_device_state.gpu_coll_env_params_var.reduce_scratch_size /
                                    sizeof(long)];
         case FCOLLECT:
-            return &team_psync[2 * NVSHMEMI_SYNC_SIZE +
+            return &team_psync[4 * NVSHMEMI_SYNC_SIZE +
                                nvshmemi_device_state.gpu_coll_env_params_var.reduce_scratch_size /
                                    sizeof(long) +
                                NVSHMEMI_BCAST_SYNC_SIZE];
         case ALLTOALL:
-            return &team_psync[2 * NVSHMEMI_SYNC_SIZE +
+            return &team_psync[4 * NVSHMEMI_SYNC_SIZE +
                                nvshmemi_device_state.gpu_coll_env_params_var.reduce_scratch_size /
                                    sizeof(long) +
                                NVSHMEMI_BCAST_SYNC_SIZE + psync_fcollect_len +
                                (NVSHMEMI_ALLTOALL_SYNC_SIZE * (team->alltoall_count % 2))];
         case FCOLLECT_128:
-            return &team_psync[2 * NVSHMEMI_SYNC_SIZE +
+            return &team_psync[4 * NVSHMEMI_SYNC_SIZE +
                                nvshmemi_device_state.gpu_coll_env_params_var.reduce_scratch_size /
                                    sizeof(long) +
                                NVSHMEMI_BCAST_SYNC_SIZE + psync_fcollect_len +
                                2 * NVSHMEMI_ALLTOALL_SYNC_SIZE];
         case P2P_SYNC_ON_STREAM:
-            return &team_psync[2 * NVSHMEMI_SYNC_SIZE +
+            return &team_psync[4 * NVSHMEMI_SYNC_SIZE +
                                nvshmemi_device_state.gpu_coll_env_params_var.reduce_scratch_size /
                                    sizeof(long) +
                                NVSHMEMI_BCAST_SYNC_SIZE + psync_fcollect_len +

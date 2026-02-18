@@ -46,7 +46,7 @@ set_property(TARGET nvshmem_device PROPERTY IMPORTED_LOCATION ${CMAKE_CURRENT_BI
 ## Start bitcode library configurations
 
 if(CUDAToolkit_VERSION_MAJOR LESS 13)
-  set(LIB_CXX_STANDARD 11)
+  set(LIB_CXX_STANDARD 17)
 else()
   set(LIB_CXX_STANDARD 17)
 endif()
@@ -67,11 +67,15 @@ if(NVSHMEM_BUILD_BITCODE_LIBRARY)
     set(BITCODE_LIB_ARCH "sm_90")
   endif()
 
+  message(STATUS "BITCODE_LIB_ARCH: ${BITCODE_LIB_ARCH}")
+
   if(CUDAToolkit_VERSION_MAJOR LESS 13)
-    set(BITCODE_CXX_STD "c++11")
+    set(BITCODE_CXX_STD "c++17")
   else()
     set(BITCODE_CXX_STD "c++17")
   endif()
+
+  message(STATUS "BITCODE_CXX_STD: ${BITCODE_CXX_STD}")
 
   # Note - today we do optimization to avoid having a too large bitcode file. There are, as of clang 18, some existing
   # limitations around compiling device libraries which make optimizing this library fine. Once these issues are fixed
@@ -259,7 +263,7 @@ macro(nvshmem_library_set_base_config LIBNAME)
     INTERFACE $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<BOOL:${NVSHMEM_VERBOSE}>>:-Xptxas -v>
     PRIVATE $<IF:$<CONFIG:Debug>,-O0;-g;,-O3>
     $<$<AND:$<BOOL:${NVSHMEM_VERBOSE}>,$<COMPILE_LANGUAGE:CUDA>>:-Xptxas -v>
-    $<IF:$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>,-O0;-g;-G;,-O3>
+    $<IF:$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>,-O0;-g;-G;,>
     $<IF:$<STREQUAL:${CMAKE_HOST_SYSTEM_PROCESSOR},"x86_64">,-msse,>
     $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<BOOL:${NVCC_THREADS}>>:-t4>
   )
@@ -826,7 +830,7 @@ if(NVSHMEM_BUILD_PACKAGES AND NVSHMEM_BUILD_HYDRA_LAUNCHER)
                                ${CMAKE_CURRENT_BINARY_DIR}/bin/nvshmrun
                                ${CMAKE_CURRENT_BINARY_DIR}/bin/nvshmrun.hydra
                   )
-  add_dependencies(nvshmem git_commit hydra)
+  add_dependencies(nvshmem_host git_commit hydra)
 endif()
 add_dependencies(nvshmem_host nvshmem_device_project-build)
 
@@ -1062,3 +1066,4 @@ add_custom_target(package_src_target
     DEPENDS build_bindings_cybind build_bindings_numbast
     VERBATIM
 )
+

@@ -32,10 +32,11 @@ endif()
 # addNumbast target is only executed in build_source_pkg instance. In subsequent
 # steps, we exclude addNumbast from source file. The following step skips
 # addNumbast target for all subsequent steps.
-if(EXISTS "${CMAKE_SOURCE_DIR}/nvshmem4py/cmake/addNumbast.cmake" AND NVSHMEM_BUILD_PYTHON_DEVICE_LIB)
+# Skip bindings if they are already generated
+if(EXISTS "${CMAKE_SOURCE_DIR}/nvshmem4py/cmake/addNumbast.cmake" AND NVSHMEM_BUILD_PYTHON_DEVICE_LIB AND NOT EXISTS "${CMAKE_SOURCE_DIR}/nvshmem4py/nvshmem/bindings/device/numba/_numbast.py")
     include(cmake/addNumbast.cmake)
     AddNumbast(
-        GIT_TAG "v0.5.2"
+        GIT_TAG "v0.5.4"
     )
 endif()
 
@@ -48,6 +49,12 @@ execute_process(
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
+string(REPLACE "3.9|/usr/bin/python3.9" "" PYTHON_VERSION_LINES "${PYTHON_VERSION_LINES}")
+string(REPLACE "3.10|/usr/bin/python3.10" "" PYTHON_VERSION_LINES "${PYTHON_VERSION_LINES}")
+string(REPLACE "3.11|/usr/bin/python3.11" "" PYTHON_VERSION_LINES "${PYTHON_VERSION_LINES}")
+string(REPLACE "3.12|/usr/bin/python3.12" "" PYTHON_VERSION_LINES "${PYTHON_VERSION_LINES}")
+string(STRIP PYTHON_VERSION_LINES ${PYTHON_VERSION_LINES})
+
 # Each line is now "3.10|/usr/bin/python3.10"
 # Convert to list
 string(REPLACE "\n" ";" PYTHON_LINE_LIST "${PYTHON_VERSION_LINES}")
@@ -57,11 +64,15 @@ set(ALL_WHEEL_TARGETS "")
 set(PREV_WHEEL_TARGET "")
 
 foreach(LINE IN LISTS PYTHON_LINE_LIST)
+    if ("${LINE}" STREQUAL "")
+      continue()
+    endif()
+
     string(REPLACE "|" ";" PYTHON_PAIR "${LINE}")
     list(GET PYTHON_PAIR 0 PY_VER)
     list(GET PYTHON_PAIR 1 PY_EXEC)
     message(STATUS "Found Python3 ${PY_EXEC}")
-    set(CUDA_VERSIONS "11" "12" "13")
+    set(CUDA_VERSIONS "12" "13")
 
     foreach(CUDA_VER IN LISTS CUDA_VERSIONS)
         set(WHEEL_TARGET build_nvshmem4py_wheel_cu${CUDA_VER}_${PY_VER})

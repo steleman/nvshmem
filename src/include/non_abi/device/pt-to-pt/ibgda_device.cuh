@@ -1258,7 +1258,7 @@ __device__ NVSHMEMI_STATIC NVSHMEMI_DEVICE_ALWAYS_INLINE void ibgda_write_atomic
     ibgda_ctrl_seg_t ctrl_seg;
     struct mlx5_wqe_raddr_seg raddr_seg;
     struct mlx5_wqe_atomic_seg atomic_seg_1;
-    struct mlx5_wqe_atomic_seg atomic_seg_2;
+    struct mlx5_wqe_atomic_seg atomic_seg_2 = {0};
     struct mlx5_wqe_data_seg data_seg;
 
     ibgda_ctrl_seg_t *ctrl_seg_ptr = (ibgda_ctrl_seg_t *)out_wqes[0];
@@ -1914,7 +1914,11 @@ __device__ NVSHMEMI_STATIC NVSHMEMI_DEVICE_ALWAYS_INLINE void ibgda_get_raddr_rk
     // nvshmemi_device_state_d.npes to become 0 in this function.
     // WAR: Force reload of nvshmemi_device_state_d.npes. We may reload from L1
     // most of the time, so the performance hit is minimal.
+#if defined __clang_llvm_bitcode_lib__
+    asm volatile("ld.const.b32 %0, [%1];" : "=r"(npes) : "l"(&nvshmemi_device_state_d.npes));
+#else
     asm volatile("ld.b32 %0, [%1];" : "=r"(npes) : "l"(&nvshmemi_device_state_d.npes));
+#endif
 
     uint64_t idx =
         ((roffset >> state->log2_cumem_granularity) * npes * state->num_devices_initialized) +
@@ -2592,6 +2596,7 @@ __device__ NVSHMEMI_DEVICE_ALWAYS_INLINE void nvshmemi_ibgda_rma_p(
 
     CONSTANT_ADDRESS_SPACE nvshmemi_ibgda_device_state_t *state = ibgda_get_state();
 
+#ifndef __clang_llvm_bitcode_lib__
     if (amask == IBGDA_FULL_WARP) {
         /* TODO: Adding multi-dev support could have caused a regression with coalescing. */
         __be32 rkey;
@@ -2612,7 +2617,9 @@ __device__ NVSHMEMI_DEVICE_ALWAYS_INLINE void nvshmemi_ibgda_rma_p(
             nvshmemi_ibgda_rma_p_impl<T, true, false, true>(rptr, value, dst_pe, qp_index);
         else
             nvshmemi_ibgda_rma_p_impl<T, true, false, false>(rptr, value, dst_pe, qp_index);
-    } else if (state->support_half_av_seg)
+    } else
+#endif
+        if (state->support_half_av_seg)
         nvshmemi_ibgda_rma_p_impl<T, false, false, true>(rptr, value, dst_pe, qp_index);
     else
         nvshmemi_ibgda_rma_p_impl<T, false, false, false>(rptr, value, dst_pe, qp_index);
@@ -2783,7 +2790,11 @@ __device__ NVSHMEMI_DEVICE_ALWAYS_INLINE void nvshmemi_ibgda_rma_nbi(
     nvshmemx_qp_handle_t qp_index = NVSHMEMX_QP_DEFAULT) {
     CONSTANT_ADDRESS_SPACE nvshmemi_ibgda_device_state_t *state = ibgda_get_state();
     int proxy_pe = ibgda_get_proxy_pe(dst_pe);
+#ifndef __clang_llvm_bitcode_lib__
     if (SCOPE == NVSHMEMI_THREADGROUP_THREAD) {
+#else
+    if (nvshmemi_thread_id_in_threadgroup<SCOPE>() == 0) {
+#endif
         if (state->support_half_av_seg) {
             ibgda_rma_thread<channel_op, true, true>((uint64_t)rptr, (uint64_t)lptr, bytes, dst_pe,
                                                      proxy_pe, qp_index);
@@ -2791,6 +2802,7 @@ __device__ NVSHMEMI_DEVICE_ALWAYS_INLINE void nvshmemi_ibgda_rma_nbi(
             ibgda_rma_thread<channel_op, true, false>((uint64_t)rptr, (uint64_t)lptr, bytes, dst_pe,
                                                       proxy_pe, qp_index);
         }
+#ifndef __clang_llvm_bitcode_lib__
     } else {
         if (state->support_half_av_seg) {
             ibgda_rma<SCOPE, channel_op, true, true>((uint64_t)rptr, (uint64_t)lptr, bytes, dst_pe,
@@ -2800,6 +2812,10 @@ __device__ NVSHMEMI_DEVICE_ALWAYS_INLINE void nvshmemi_ibgda_rma_nbi(
                                                       proxy_pe, qp_index);
         }
     }
+#else
+    }
+    nvshmemi_threadgroup_sync<SCOPE>();
+#endif
 }
 
 /**
@@ -2848,7 +2864,11 @@ __device__ NVSHMEMI_DEVICE_ALWAYS_INLINE void nvshmemi_ibgda_amo_nonfetch_impl(
     uint64_t raddr;
     size_t rchunk_size;
 
+#ifndef __clang_llvm_bitcode_lib__
     bool can_coalesce_warp = ibgda_can_coalesce_warp_pe(amask, pe);
+#else
+    bool can_coalesce_warp = false;
+#endif
 
     if (can_coalesce_warp) {
         my_tid = nvshmemi_thread_id_in_threadgroup<NVSHMEMI_THREADGROUP_WARP>();
@@ -2943,7 +2963,11 @@ nvshmemi_ibgda_amo_fetch_impl(void *rptr, const T value, const T compare, int pe
     uint64_t raddr;
     size_t rchunk_size;
 
+#ifndef __clang_llvm_bitcode_lib__
     bool can_coalesce_warp = ibgda_can_coalesce_warp_pe(amask, pe);
+#else
+    bool can_coalesce_warp = false;
+#endif
 
     if (can_coalesce_warp) {
         my_tid = nvshmemi_thread_id_in_threadgroup<NVSHMEMI_THREADGROUP_WARP>();
@@ -3072,7 +3096,11 @@ __device__ NVSHMEMI_STATIC NVSHMEMI_DEVICE_ALWAYS_INLINE void nvshmemi_ibgda_put
     __be32 rkey;
     __be32 sig_rkey;
 
+#ifndef __clang_llvm_bitcode_lib__
     bool can_coalesce_warp = ibgda_can_coalesce_warp_pe(amask, pe);
+#else
+    bool can_coalesce_warp = false;
+#endif
     bool is_qp_shared_among_ctas;
     bool is_data_buf_in_sysmem;
 
@@ -3114,6 +3142,9 @@ __device__ NVSHMEMI_STATIC NVSHMEMI_DEVICE_ALWAYS_INLINE void nvshmemi_ibgda_put
             base_wqe_idx = ibgda_reserve_wqe_slots(qp, num_wqes, is_qp_shared_among_ctas);
         }
 
+        if (can_coalesce_warp) {
+            base_wqe_idx = __shfl_sync(IBGDA_FULL_WARP, base_wqe_idx, 0);
+        }
         my_wqe_idx = base_wqe_idx + (my_tid * num_wqes_per_cmd);
 
         void *wqe_ptrs[4];
@@ -3357,7 +3388,11 @@ __device__ NVSHMEMI_DEVICE_ALWAYS_INLINE void nvshmemi_ibgda_put_signal(
     void *rptr, void *lptr, size_t bytes, void *sig_rptr, uint64_t signal, nvshmemi_amo_t sig_op,
     int pe, bool is_nbi, nvshmemx_qp_handle_t qp_index = NVSHMEMX_QP_DEFAULT) {
     CONSTANT_ADDRESS_SPACE nvshmemi_ibgda_device_state_t *state = ibgda_get_state();
+#ifndef __clang_llvm_bitcode_lib__
     if (SCOPE == NVSHMEMI_THREADGROUP_THREAD) {
+#else
+    if (nvshmemi_thread_id_in_threadgroup<SCOPE>() == 0) {
+#endif
         if (is_nbi && state->support_half_av_seg)
             nvshmemi_ibgda_put_signal_thread_impl<true, true>(rptr, lptr, bytes, sig_rptr, signal,
                                                               sig_op, pe, qp_index);
@@ -3370,7 +3405,9 @@ __device__ NVSHMEMI_DEVICE_ALWAYS_INLINE void nvshmemi_ibgda_put_signal(
         else
             nvshmemi_ibgda_put_signal_thread_impl<false, false>(rptr, lptr, bytes, sig_rptr, signal,
                                                                 sig_op, pe, qp_index);
-    } else {
+    }
+#ifndef __clang_llvm_bitcode_lib__
+    else {
         if (is_nbi && state->support_half_av_seg)
             nvshmemi_ibgda_put_signal_impl<SCOPE, true, true>(rptr, lptr, bytes, sig_rptr, signal,
                                                               sig_op, pe, qp_index);
@@ -3384,35 +3421,7 @@ __device__ NVSHMEMI_DEVICE_ALWAYS_INLINE void nvshmemi_ibgda_put_signal(
             nvshmemi_ibgda_put_signal_impl<SCOPE, false, false>(rptr, lptr, bytes, sig_rptr, signal,
                                                                 sig_op, pe, qp_index);
     }
-}
-
-template <threadgroup_t SCOPE>
-__device__ NVSHMEMI_DEVICE_ALWAYS_INLINE void nvshmemi_ibgda_quiet() {
-    CONSTANT_ADDRESS_SPACE nvshmemi_ibgda_device_state_t *state = ibgda_get_state();
-    nvshmemi_ibgda_device_qp_t *qp;
-    uint32_t ndcis = state->num_shared_dcis + state->num_exclusive_dcis;
-    uint32_t nrcs = state->num_default_rc_per_pe * nvshmemi_device_state_d.npes *
-                    state->num_devices_initialized;
-    uint32_t index_in_scope = nvshmemi_thread_id_in_threadgroup<SCOPE>();
-    uint32_t scope_size = nvshmemi_threadgroup_size<SCOPE>();
-
-    scope_size =
-        scope_size > IBGDA_MAX_THREADS_PER_QUIET ? IBGDA_MAX_THREADS_PER_QUIET : scope_size;
-
-    if (index_in_scope < scope_size) {
-        for (uint32_t i = index_in_scope; i < ndcis; i += scope_size) {
-            qp = &state->globalmem.dcis[i];
-            ibgda_quiet_with_cst(qp, true);
-        }
-
-        for (uint32_t i = index_in_scope; i < nrcs; i += scope_size) {
-            if (i % nvshmemi_device_state_d.npes == nvshmemi_device_state_d.mype) {
-                continue;
-            }
-            qp = &state->globalmem.rcs[i];
-            ibgda_quiet_with_cst(qp, true);
-        }
-    }
+#endif
 }
 
 template <threadgroup_t SCOPE>
@@ -3422,11 +3431,15 @@ __device__ NVSHMEMI_DEVICE_ALWAYS_INLINE void nvshmemi_ibgda_qp_quiet(
     nvshmemi_ibgda_device_qp_t *qp;
     int npes;
     int start_pe;
-    uint32_t nrcs = NVSHMEMI_MIN(num_qps, state->num_rc_per_pe * state->num_devices_initialized);
+    uint32_t ndcis = state->num_shared_dcis + state->num_exclusive_dcis;
+    uint32_t nrcs;
     uint32_t index_in_scope = nvshmemi_thread_id_in_threadgroup<SCOPE>();
     uint32_t scope_size = nvshmemi_threadgroup_size<SCOPE>();
 
-    if (pe_hint == -1) {
+    scope_size =
+        scope_size > IBGDA_MAX_THREADS_PER_QUIET ? IBGDA_MAX_THREADS_PER_QUIET : scope_size;
+
+    if (pe_hint == NVSHMEMX_PE_ANY) {
         npes = nvshmemi_device_state_d.npes;
         start_pe = 0;
     } else {
@@ -3434,10 +3447,27 @@ __device__ NVSHMEMI_DEVICE_ALWAYS_INLINE void nvshmemi_ibgda_qp_quiet(
         start_pe = pe_hint;
     }
 
-    if (qp_handle == NULL || qp_handle[0] == NVSHMEMX_QP_DEFAULT ||
-        qp_handle[0] == NVSHMEMX_QP_ANY) {
-        nvshmemi_ibgda_quiet<SCOPE>();
-        return;
+    /* In all or default case, we need to quiet all DCIs too. */
+    if (num_qps == NVSHMEMX_QP_ALL || qp_handle && qp_handle[0] == NVSHMEMX_QP_ALL) {
+        nrcs = state->num_rc_per_pe * state->num_devices_initialized;
+        if (index_in_scope < scope_size) {
+            for (uint32_t i = index_in_scope; i < ndcis; i += scope_size) {
+                qp = &state->globalmem.dcis[i];
+                ibgda_quiet_with_cst(qp, true);
+            }
+        }
+        qp_handle = NULL;
+    } else if (num_qps == NVSHMEMX_QP_DEFAULT || qp_handle && qp_handle[0] == NVSHMEMX_QP_DEFAULT) {
+        nrcs = state->num_default_rc_per_pe * state->num_devices_initialized;
+        if (index_in_scope < scope_size) {
+            for (uint32_t i = index_in_scope; i < ndcis; i += scope_size) {
+                qp = &state->globalmem.dcis[i];
+                ibgda_quiet_with_cst(qp, true);
+            }
+        }
+        qp_handle = NULL;
+    } else {
+        nrcs = NVSHMEMI_MIN(num_qps, state->num_rc_per_pe * state->num_devices_initialized);
     }
 
     scope_size =
@@ -3446,8 +3476,8 @@ __device__ NVSHMEMI_DEVICE_ALWAYS_INLINE void nvshmemi_ibgda_qp_quiet(
     // Match this up with the new qp addition APIs.
     if (index_in_scope < scope_size) {
         for (uint32_t i = index_in_scope; i < nrcs * npes; i += scope_size) {
-            int qp_idx = i / num_qps;
-            int pe_idx = i % num_qps;
+            int qp_idx = i % nrcs;
+            int pe_idx = (i / nrcs) + start_pe;
             if (pe_idx == nvshmemi_device_state_d.mype) {
                 continue;
             }
@@ -3455,7 +3485,11 @@ __device__ NVSHMEMI_DEVICE_ALWAYS_INLINE void nvshmemi_ibgda_qp_quiet(
                 continue;
             }
 
-            qp = &state->globalmem.rcs[qp_idx + pe_idx];
+            if (qp_handle == NULL) {
+                qp = &state->globalmem.rcs[qp_idx * nvshmemi_device_state_d.npes + pe_idx];
+            } else {
+                qp = &state->globalmem.rcs[qp_handle[qp_idx] + pe_idx];
+            }
             ibgda_quiet_with_cst(qp, enforce_cst);
         }
     }
@@ -3505,7 +3539,7 @@ template <threadgroup_t SCOPE>
 __device__ NVSHMEMI_DEVICE_ALWAYS_INLINE void nvshmemi_ibgda_qp_fence(
     int pe_hint, nvshmemx_qp_handle_t *qp_handle, int num_qps) {
     if (num_qps != 1 || qp_handle == NULL || qp_handle[0] == NVSHMEMX_QP_DEFAULT ||
-        qp_handle[0] == NVSHMEMX_QP_ANY) {
+        num_qps == NVSHMEMX_QP_ALL) {
         // Fence does not guarantee the completion of prior operations.
         // It is ok for GET to finish without data arrival.
         // Use ibgda_quiet here instead of ibgda_quiet_with_cst since it is cheaper.
