@@ -94,21 +94,43 @@ if(NOT SubBuild)
 
    if(NVSHMEM_SHMEM_SUPPORT)
      find_library(SHMEM_LIB
-                  NAMES shmem oshmem
+                  NAMES shmem
+                  HINTS ${SHMEM_HOME}
+                  PATH_SUFFIXES lib64 lib)
+     find_library(SHMEMU_LIB
+                  NAMES shmemu
+                  HINTS ${SHMEM_HOME}
+                  PATH_SUFFIXES lib64 lib)
+     find_library(SHMEMT_LIB
+                  NAMES shmemt
+                  HINTS ${SHMEM_HOME}
+                  PATH_SUFFIXES lib64 lib)
+     find_library(SHMEMC_UCX_LIB
+                  NAMES shmemc-ucx
+                  HINTS ${SHMEM_HOME}
+                  PATH_SUFFIXES lib64 lib)
+     find_library(SHMEM_AMO_LIB
+                  NAMES shmem-amo
+                  HINTS ${SHMEM_HOME}
+                  PATH_SUFFIXES lib64 lib)
+     find_library(SHCOLL_LIB
+                  NAMES shcoll
                   HINTS ${SHMEM_HOME}
                   PATH_SUFFIXES lib64 lib)
      find_path(SHMEM_INCLUDE NAME shmem.h HINTS ${SHMEM_HOME}
                PATH_SUFFIXES include)
      add_library(shmem IMPORTED INTERFACE)
+     add_library(shmem-amo IMPORTED INTERFACE)
      add_library(shmemc-ucx IMPORTED INTERFACE)
      add_library(shmemt IMPORTED INTERFACE)
      add_library(shmemu IMPORTED INTERFACE)
      add_library(shcoll IMPORTED INTERFACE)
      target_link_libraries(shmem INTERFACE ${SHMEM_LIB})
-     target_link_libraries(shmemc-ucx INTERFACE ${SHMEM_LIB})
-     target_link_libraries(shmemt INTERFACE ${SHMEM_LIB})
-     target_link_libraries(shmemu INTERFACE ${SHMEM_LIB})
-     target_link_libraries(shcoll INTERFACE ${SHMEM_LIB})
+     target_link_libraries(shmem-amo INTERFACE ${SHMEM_AMO_LIB})
+     target_link_libraries(shmemc-ucx INTERFACE ${SHMEMC_UCX_LIB})
+     target_link_libraries(shmemt INTERFACE ${SHMEMT_LIB})
+     target_link_libraries(shmemu INTERFACE ${SHMEMU_LIB})
+     target_link_libraries(shcoll INTERFACE ${SHCOLL_LIB})
      target_include_directories(shmem INTERFACE ${SHMEM_INCLUDE})
      if(NVSHMEM_MPI_SUPPORT)
        separate_arguments(SHMEM_C_LINK_FLAGS NATIVE_COMMAND "${MPI_C_LINK_FLAGS}")
@@ -119,11 +141,7 @@ if(NOT SubBuild)
    endif()
 endif()
 
-if(CUDAToolkit_VERSION_MAJOR LESS 13)
-  set(EXAMPLES_CXX_STANDARD 11)
-else()
-  set(EXAMPLES_CXX_STANDARD 17)
-endif()
+set(EXAMPLES_CXX_STANDARD 17)
 
 add_library(nvshmem_example_helper INTERFACE)
 target_link_libraries(nvshmem_example_helper INTERFACE CUDA::cudart CUDA::cuda_driver)
@@ -131,13 +149,19 @@ target_link_libraries(nvshmem_example_helper INTERFACE nvshmem_host nvshmem_devi
 
 # Unused by any examples currently compiled.
 # TODO: Resurrect the shmem-based-init example.
-#if(NVSHMEM_SHMEM_SUPPORT)
-#  target_link_libraries(nvshmem_example_helper INTERFACE shmem)
-#  target_compile_definitions(nvshmem_example_helper INTERFACE NVSHMEMTEST_SHMEM_SUPPORT)
-#endif()
+if(NVSHMEM_SHMEM_SUPPORT)
+  target_link_libraries(nvshmem_example_helper INTERFACE shmem)
+  target_link_libraries(nvshmem_example_helper INTERFACE shmemu)
+  target_link_libraries(nvshmem_example_helper INTERFACE shmemt)
+  target_link_libraries(nvshmem_example_helper INTERFACE shmemc-ucx)
+  target_link_libraries(nvshmem_example_helper INTERFACE shmem-amo)
+  target_link_libraries(nvshmem_example_helper INTERFACE shcoll)
+  target_compile_definitions(nvshmem_example_helper INTERFACE NVSHMEMTEST_SHMEM_SUPPORT)
+endif()
 
 set(MPI_EXAMPLES "")
 set(ALL_EXAMPLES "")
+
 if(NVSHMEM_MPI_SUPPORT)
   target_compile_definitions(nvshmem_example_helper INTERFACE NVSHMEMTEST_MPI_SUPPORT)
   target_include_directories(nvshmem_example_helper INTERFACE $<BUILD_INTERFACE:${MPI_CXX_INCLUDE_DIRS}>)
@@ -145,13 +169,12 @@ if(NVSHMEM_MPI_SUPPORT)
   list(APPEND MPI_EXAMPLES
     mpi-based-init.cu
     uid-based-init.cu
-    dev-guide-ring-mpi.cu
-    )
+    dev-guide-ring-mpi.cu)
 
   foreach(example ${MPI_EXAMPLES})
     get_filename_component(NAME_ ${example} NAME_WE)
     add_executable(${NAME_} ${example})
-  
+
     target_link_libraries(${NAME_} MPI::MPI_CXX)
     target_compile_definitions(${NAME_} PRIVATE NVSHMEMTEST_MPI_SUPPORT)
 
@@ -173,14 +196,32 @@ set(OPTIONAL_MPI_EXAMPLES
   user-buffer.cu
   )
 
-set(CUTLASS_EXAMPLES
-    gemm_allreduce/gemmAR_fusion_blackwell_fp16.cu
-   )
+set(CUTLASS_EXAMPLES gemm_allreduce/gemmAR_fusion_blackwell_fp16.cu)
 
-LIST(APPEND ALL_EXAMPLES ${MPI_EXAMPLES} ${OPTIONAL_MPI_EXAMPLES})
+set(SHMEM_EXAMPLES shmem-based-init.cu)
+
+foreach(example ${SHMEM_EXAMPLES})
+  get_filename_component(NAME_ ${example} NAME_WE)
+  add_executable(${NAME_} ${example})
+  message(STATUS "${NAME_} ${example} ${CMAKE_CUDA_ARCHITECTURES}")
+  target_link_libraries(${NAME_} INTERFACE ${SHMEM_LIB})
+  target_link_libraries(${NAME_} INTERFACE ${SHMEMU_LIB})
+  target_link_libraries(${NAME_} INTERFACE ${SHMEMT_LIB})
+  target_link_libraries(${NAME_} INTERFACE ${SHMEMC_UCX_LIB})
+  target_link_libraries(${NAME_} INTERFACE ${SHMEM_AMO_LIB})
+  target_link_libraries(${NAME_} INTERFACE ${SHCOLL_LIB})
+
+  target_include_directories(shmem INTERFACE ${SHMEM_INCLUDE})
+  target_link_libraries(${NAME_} PUBLIC nvshmem_example_helper)
+  target_link_libraries(nvshmem_example_helper INTERFACE shmem)
+  target_compile_definitions(nvshmem_example_helper INTERFACE NVSHMEMTEST_SHMEM_SUPPORT)
+  target_compile_options(${NAME_} PRIVATE --expt-relaxed-constexpr)
+endforeach()
+
+LIST(APPEND ALL_EXAMPLES ${MPI_EXAMPLES} ${OPTIONAL_MPI_EXAMPLES} ${SHMEM_EXAMPLES})
 
 if (NVSHMEM_BUILD_WITH_CUTLASS)
-    message("Building CUTLASS examples")
+    message(STATUS "Building CUTLASS examples")
     set(EXAMPLES_CXX_STANDARD 17) #CUTLASS needs C++ 17
     if ("${CUTLASS_HOME}" STREQUAL "")
         message(FATAL_ERROR "Please set CUTLASS_HOME to CUTLASS directory.")
@@ -192,8 +233,15 @@ if (NVSHMEM_BUILD_WITH_CUTLASS)
     foreach(example ${CUTLASS_EXAMPLES})
       get_filename_component(NAME_ ${example} NAME_WE)
       add_executable(${NAME_} ${example})
-      message("${NAME_} ${example} ${CMAKE_CUDA_ARCHITECTURES}")
+      message(STATUS "${NAME_} ${example} ${CMAKE_CUDA_ARCHITECTURES}")
       target_link_libraries(${NAME_} nvshmem_example_helper)
+      target_link_libraries(${NAME_} ${SHMEM_LIB})
+      target_link_libraries(${NAME_} ${SHMEMU_LIB})
+      target_link_libraries(${NAME_} ${SHMEMT_LIB})
+      target_link_libraries(${NAME_} ${SHMEMC_UCX_LIB})
+      target_link_libraries(${NAME_} ${SHMEM_AMO_LIB})
+      target_link_libraries(${NAME_} ${SHCOLL_LIB})
+      target_include_directories(${NAME_} INTERFACE ${SHMEM_INCLUDE})
       target_include_directories(${NAME_} PUBLIC
                                  ${CUTLASS_INCLUDE_DIR}
                                  ${CUTLASS_UTIL_INCLUDE_DIR}
@@ -213,10 +261,10 @@ foreach(example ${OPTIONAL_MPI_EXAMPLES})
   target_link_libraries(${NAME_} nvshmem_example_helper)
 endforeach()
 
+message(STATUS "ALL_EXAMPLES: ${ALL_EXAMPLES}")
 
 foreach(example ${ALL_EXAMPLES})
   get_filename_component(NAME_ ${example} NAME_WE)
-
   set_target_properties(${NAME_} PROPERTIES
   POSITION_INDEPENDENT_CODE ON
   CXX_STANDARD_REQUIRED ON

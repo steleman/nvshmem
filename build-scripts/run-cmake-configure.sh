@@ -61,6 +61,7 @@ cmake_flags="${cmake_flags} -DGDRCOPY_HOME=${GDRCOPY_HOME}"
 cmake_flags="${cmake_flags} -DSHMEM_HOME=${SHMEM_HOME}"
 cmake_flags="${cmake_flags} -DNCCL_HOME=${NCCL_HOME}"
 cmake_flags="${cmake_flags} -DUCX_HOME=${UCX_HOME}"
+cmake_flags="${cmake_flags} -DCUTLASS_HOME=${CUTLASS_HOME}"
 cmake_flags="${cmake_flags} -DNVSHMEM_CLANG_DIR=${NVSHMEM_CLANG_DIR}"
 cmake_flags="${cmake_flags} -DNVSHMEM_PREFIX=${NVSHMEM_PREFIX}"
 cmake_flags="${cmake_flags} -DCMAKE_CUDA_ARCHITECTURES=89"
@@ -97,25 +98,27 @@ for file in \
   ${here}/src/CMakeFiles/nvshmem_bootstrap_shmem.dir/link.txt
 do
   echo "patching link file ${file} for shmem ..."
-  sed -i 's#/usr/local/lib64/libshmem.so# -Wl,--as-needed /usr/local/lib64/libshmem.so /usr/local/lib64/libshmemc-ucx.so /usr/local/lib64/libshmemt.so /usr/local/lib64/libshmemu.so /usr/local/lib64/libshmem-amo.so /usr/local/lib64/libshcoll.so -Wl,--no-as-needed #g' ${file}
+  sed -i 's#/usr/local/lib64/libshmem.so# -Wl,--as-needed /usr/local/lib64/libshmem.so /usr/local/lib64/libshmemc-ucx.so /usr/local/lib64/libshmemt.so /usr/local/lib64/libshmemu.so /usr/local/lib64/libshmem-amo.so /usr/local/lib64/libshcoll.so /usr/lib64/libpmi.so /usr/lib64/libpmi2.so /usr/lib64/libpmix.so /usr/lib64/libucp.so -Wl,--no-as-needed #g' ${file}
 done
 
 if [ ! -e ${srcdir}/build/.patched ] ; then
   echo "cd ${srcdir}/build"
   cd ${srcdir}/build
+  herebuild="`pwd`"
 
   listfile="/tmp/shmemlink.$$"
   cat /dev/null > ${listfile}
 
   find . -type f -name 'link.txt' -print >> ${listfile}
+  find . -type f -name 'linkLibs.rsp' -print >> ${listfile}
 
   while read -r line
   do
     echo "patching link file ${line} for shmem ..."
-    sed -i 's#/usr/local/lib64/libshmem.so# -Wl,--as-needed /usr/local/lib64/libshmem.so /usr/local/lib64/libshmemc-ucx.so /usr/local/lib64/libshmemt.so /usr/local/lib64/libshmemu.so /usr/local/lib64/libshmem-amo.so /usr/local/lib64/libshcoll.so -Wl,--no-as-needed#g' ${line}
+    sed -i 's#/usr/local/lib64/libshmem.so# -Wl,--as-needed /usr/local/lib64/libshmem.so /usr/local/lib64/libshmemc-ucx.so /usr/local/lib64/libshmemt.so /usr/local/lib64/libshmemu.so /usr/local/lib64/libshmem-amo.so /usr/local/lib64/libshcoll.so /usr/lib64/libpmi.so /usr/lib64/libpmi2.so /usr/lib64/libpmix.so /usr/lib64/libucp.so -Wl,--no-as-needed -lm#g' ${line}
   done < ${listfile}
-
   rm -f ${listfile}
+
   touch .patched
   echo "cd ${here}"
   cd ${here}
